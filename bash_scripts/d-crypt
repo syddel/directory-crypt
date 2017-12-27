@@ -1,0 +1,142 @@
+#!/bin/bash
+
+RED='\033[0;31m'
+BLUE='\033[1;36m'
+GREEN='\033[1;32m'
+NC='\033[0m' # No Color
+
+UNLOCK_KEY="/home/syd/.ssh/ecryptfs_keys/1"
+MOUNT_PARAM="-m"
+UMOUNT_PARAM="-u"
+STATUS_PARAM="-s"
+
+# ----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
+unwrap_key()
+{
+  printf "\n"
+  openssl enc -d -aes-256-cbc -in "$UNLOCK_KEY.enc" -out "$UNLOCK_KEY" > /dev/null 2>&1
+}
+
+# ----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
+wrap_key()
+{
+    srm "$UNLOCK_KEY"
+}
+
+# ----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
+unlock_dir()
+{
+    mkdir -p "$ENC_DIR" "$CLR_DIR"
+
+    printf "${NC}MOUNTING..."
+    
+    if ! mountpoint -q "$CLR_DIR"; then
+
+        unwrap_key
+
+: <<'END'
+        sudo mount -t ecryptfs \
+-o key=passphrase:passphrase_passwd_file=/home/"$USER"/.ssh/ecryptfs_keys/ecryptfs_key.txt,\
+ecryptfs_cipher=aes,\
+ecryptfs_key_bytes=32,\
+ecryptfs_passthrough=no,\
+ecryptfs_enable_filename_crypto=yes,\
+ecryptfs_fnek_sig=4e02170e7ab289b5 \
+"$ENC_DIR" "$CLR_DIR"
+END
+
+        sudo mount -t ecryptfs \
+-o key=passphrase:passphrase_passwd_file="$UNLOCK_KEY",\
+ecryptfs_cipher=aes,\
+ecryptfs_key_bytes=32,\
+ecryptfs_passthrough=no,\
+ecryptfs_enable_filename_crypto=yes,\
+ecryptfs_fnek_sig=4e02170e7ab289b5 \
+"$ENC_DIR" "$CLR_DIR"
+
+        if ! mountpoint -q -- "$CLR_DIR"; then
+            printf " ${RED}ERROR: COULD NOT MOUNT ECRYPTFS DIRECTORY.${NC}\n"
+        else
+            printf " ${GREEN}DONE!${NC}\n"
+        fi
+        
+        wrap_key
+        
+    else
+        printf " ${BLUE}ALREADY MOUNTED.${NC}\n"
+    fi
+    
+} # End of unlock_dir() function.
+
+
+# ----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
+lock_dir()
+{
+    printf "${NC}UNMOUNTING..."
+    counter=0
+    while mountpoint -q -- "$CLR_DIR" && [ "$counter" -lt 20 ]; do
+        sudo umount "$CLR_DIR" > /dev/null 2>&1
+        ((counter++))
+        sleep 0.5
+        printf "."
+    done
+
+    if [ ! -d "$CLR_DIR" ]; then
+        printf " ${RED}NO SUCH DIRECTORY.${NC}\n"
+    elif [ "$counter" == 0 ]; then
+        printf " ${BLUE}ALREADY UNMOUNTED.${NC}\n"
+    elif mountpoint -q -- "$CLR_DIR"; then
+        printf " ${RED}UNABLE TO UNMONT - PROBABLY IN USE.${NC}\n"
+    else
+        printf " ${GREEN}DONE!${NC}\n"
+    fi
+
+} # End of lock_dir() function.
+
+# ----------------------------------------------------------------------------------------------
+# ----------------------------------------------------------------------------------------------
+status()
+{
+    if [ ! -d "$CLR_DIR" ]; then
+        printf "Directory: $CLR_DIR ${RED}does not exist${NC}.\n"
+    elif mountpoint -q -- "$CLR_DIR"; then
+        printf "Directory: $CLR_DIR is ${GREEN}mounted${NC}.\n"
+    else
+        printf "Directory: $CLR_DIR is ${RED}unmounted${NC}.\n"
+    fi
+}
+
+# ----------------------------------------------------------------------------------------------
+# Script execution starts here.
+# ----------------------------------------------------------------------------------------------
+
+if [ "$#" -ne 2 ] || [ "$1" != "$MOUNT_PARAM" ] && [ "$1" != "$UMOUNT_PARAM" ] && [ "$1" != "$STATUS_PARAM" ]; then
+    printf "\nUsage: $0 [$MOUNT_PARAM|$UMOUNT_PARAM] dirname.\n\n"
+    printf "\t$MOUNT_PARAM\tUnlock encrypted directory.\n"
+    printf "\t$UMOUNT_PARAM\tLock decrypted directory.\n"
+    printf "\t$STATUS_PARAM\tView the status of a directory (mounted/unmounted).\n"
+    printf "\n"
+    exit
+fi
+
+CLR_DIR="$2"
+FNAME=$(basename $2)
+DIRNAME=$(dirname $2)
+ENC_DIR="$DIRNAME/.$FNAME"
+
+if [ "$1" = "$MOUNT_PARAM" ]; then
+    unlock_dir "$ENC_DIR" "$CLR_DIR"
+fi # -u if block (unlocking)
+
+if [ "$1" = "$UMOUNT_PARAM" ]; then
+    lock_dir "$CLR_DIR"
+fi # -l if block (locking)
+
+if [ "$1" = "$STATUS_PARAM" ]; then
+    status
+fi # -l if block (locking)
+
